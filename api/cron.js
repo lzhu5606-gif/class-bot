@@ -1,12 +1,12 @@
 module.exports = async function(req, res) {
-  // 1. 获取北京时间
+  // 1. 获取北京时间 (强制转换为亚洲/上海时区，完美解决国外服务器时差问题)
   const date = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Shanghai"}));
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   const todayStr = `${month}-${day}`;
-  const hour = date.getHours(); // 获取当前是几点
+  const hour = date.getHours(); // 获取当前北京时间是几点
 
-  // 【架构师调试后门】判断是否是手动访问链接强制测试 (浏览器访问 xxx.vercel.app/api?force=1)
+  // 【架构师调试后门】判断是否是手动访问链接强制测试
   const isForceTest = req.query && req.query.force === '1';
   console.log(`[运行日志] 当前北京时间: ${todayStr} ${hour}点, 是否强制测试: ${isForceTest}`);
 
@@ -34,11 +34,13 @@ module.exports = async function(req, res) {
 
   // --- 智能时间判断核心逻辑 ---
   if (hour === 10) {
-    // 【新增：10点专属测试】只要在 10:00~10:59 期间运行，必定发送这条测试消息
+    // 【10点专属测试通道】(只在 10:00~10:59 期间生效)
     shouldSend = true;
-    textContent = `✅ 【10点连通性测试】\n\n收到这条消息，说明你的企业微信 Webhook 环境变量配置完全没问题！Vercel 云端大脑正常工作！\n(当前北京时间: ${todayStr} ${hour}点)`;
+    textContent = `✅ 【10点连通性测试】\n\n收到这条消息，说明你的企业微信 Webhook 环境变量配置完全没问题！Vercel 原生 fetch 调用成功！\n(当前北京时间: ${todayStr} ${hour}点)`;
   } else if (!courseName) {
+    // 【今天没课】
     if (hour === 9 || isForceTest) {
+      // 满足需求：哪怕今天没课，早上 9 点也必须发一条消息
       shouldSend = true;
       textContent = `☕ 早上好！(${todayStr})\n\n今天课表上没有安排课程，好好休息或者自主学习吧！${isForceTest ? '\n(这是一条强制测试消息)' : ''}`;
     } else {
@@ -46,10 +48,12 @@ module.exports = async function(req, res) {
       return res.status(200).json({ message: "今天没课，下午/晚上已自动保持安静。" });
     }
   } else {
+    // 【今天有课】
     const info = coursesInfo[courseName];
     const startHour = parseInt(info.time.split(":")[0], 10);
 
     if (hour === 9 || isForceTest) {
+      // 满足需求：今天有课，早上 9 点准时发预告
       shouldSend = true;
     } else if (hour === 14 && startHour >= 12 && startHour < 18) {
       shouldSend = true;
@@ -77,11 +81,11 @@ module.exports = async function(req, res) {
   
   if (!WEBHOOK_URL) {
     console.error("[运行日志] 严重错误：未读取到环境变量 WX_WEBHOOK_URL");
-    return res.status(500).json({ error: "环境变量未配置。请检查 Vercel 的 Environment Variables，并确保配置后进行了 Redeploy(重新部署)！" });
+    return res.status(500).json({ error: "环境变量未配置" });
   }
 
   try {
-    const fetch = (await import('node-fetch')).default || globalThis.fetch;
+    // 【核心修复】直接使用 Vercel Node 18+ 原生自带的 fetch，彻底抛弃 node-fetch 依赖！
     const response = await fetch(WEBHOOK_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
