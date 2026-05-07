@@ -4,7 +4,11 @@ module.exports = async function(req, res) {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   const todayStr = `${month}-${day}`;
-  const hour = date.getHours(); // 获取当前是几点 (例如 9, 14, 18)
+  const hour = date.getHours(); // 获取当前是几点
+
+  // 【架构师调试后门】判断是否是手动访问链接强制测试 (浏览器访问 xxx.vercel.app/api?force=1)
+  const isForceTest = req.query && req.query.force === '1';
+  console.log(`[运行日志] 当前北京时间: ${todayStr} ${hour}点, 是否强制测试: ${isForceTest}`);
 
   // 2. 课程基础信息
   const coursesInfo = {
@@ -29,31 +33,30 @@ module.exports = async function(req, res) {
   let shouldSend = false;
 
   // --- 智能时间判断核心逻辑 ---
-  if (!courseName) {
-    if (hour === 9) {
-      // 没课的日子，只在早上 9 点发一次温馨提示
+  if (hour === 10) {
+    // 【新增：10点专属测试】只要在 10:00~10:59 期间运行，必定发送这条测试消息
+    shouldSend = true;
+    textContent = `✅ 【10点连通性测试】\n\n收到这条消息，说明你的企业微信 Webhook 环境变量配置完全没问题！Vercel 云端大脑正常工作！\n(当前北京时间: ${todayStr} ${hour}点)`;
+  } else if (!courseName) {
+    if (hour === 9 || isForceTest) {
       shouldSend = true;
-      textContent = `☕ 早上好！(${todayStr})\n\n今天课表上没有安排课程，好好休息或者自主学习吧！`;
+      textContent = `☕ 早上好！(${todayStr})\n\n今天课表上没有安排课程，好好休息或者自主学习吧！${isForceTest ? '\n(这是一条强制测试消息)' : ''}`;
     } else {
-      // 下午和晚上直接休眠
+      console.log("[运行日志] 没课，且不在9点，自动保持安静。");
       return res.status(200).json({ message: "今天没课，下午/晚上已自动保持安静。" });
     }
   } else {
     const info = coursesInfo[courseName];
-    // 解析出这门课的开始小时数。例如 "14:30-17:00" 会提取出数字 14
     const startHour = parseInt(info.time.split(":")[0], 10);
 
-    if (hour === 9) {
-      // 规则 A：只要今天有课，早上 9 点雷打不动推送一次全天预告
+    if (hour === 9 || isForceTest) {
       shouldSend = true;
     } else if (hour === 14 && startHour >= 12 && startHour < 18) {
-      // 规则 B：下午 14:00 醒来，发现上课时间是下午（12点~18点之间），推送！
       shouldSend = true;
     } else if (hour === 18 && startHour >= 18) {
-      // 规则 C：晚上 18:30 醒来，发现上课时间是晚上（18点以后），推送！
       shouldSend = true;
     } else {
-      // 不符合上述情况（比如上午的课在下午闹钟响了，或者下午的课晚上闹钟响了），直接跳过
+      console.log(`[运行日志] 当前时间(${hour}点)不满足有课时的推送条件。`);
       return res.status(200).json({ message: "当前时间与上课时间不匹配，无需重复推送此课程。" });
     }
 
@@ -63,13 +66,19 @@ module.exports = async function(req, res) {
                     `👨‍🏫 教师：${info.teacher}\n` +
                     `⏰ 时间：${info.time}\n` +
                     `📍 教室：${info.room}\n` +
-                    `🔗 直播：${info.link}`;
+                    `🔗 直播：${info.link}` + 
+                    (isForceTest ? '\n(这是一条强制测试消息)' : '');
     }
   }
   // --- 逻辑判断结束 ---
 
+  // 读取 Vercel 中的环境变量
   const WEBHOOK_URL = process.env.WX_WEBHOOK_URL; 
-  if (!WEBHOOK_URL) return res.status(500).json({ error: "环境变量未配置" });
+  
+  if (!WEBHOOK_URL) {
+    console.error("[运行日志] 严重错误：未读取到环境变量 WX_WEBHOOK_URL");
+    return res.status(500).json({ error: "环境变量未配置。请检查 Vercel 的 Environment Variables，并确保配置后进行了 Redeploy(重新部署)！" });
+  }
 
   try {
     const fetch = (await import('node-fetch')).default || globalThis.fetch;
@@ -83,8 +92,10 @@ module.exports = async function(req, res) {
     });
     
     const result = await response.json();
+    console.log("[运行日志] 发送成功，企业微信返回值:", result);
     res.status(200).json({ success: true, result });
   } catch (error) {
+    console.error("[运行日志] 请求报错:", error.message);
     res.status(500).json({ error: error.message });
   }
 };
